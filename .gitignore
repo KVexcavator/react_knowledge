@@ -1,0 +1,4 @@
+.qodo
+*.ts
+*.m2u8
+__pycache__/

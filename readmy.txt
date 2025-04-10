@@ -1,0 +1,49 @@
+window drawing:
+----------------------------------------
+camera_stream:
+1. Python-сервер берёт видео с камеры (через OpenCV)
+```bash
+python3 camera_stream.py
+```
+2. http.server отдает MJPEG-поток на http://localhost:8002/video
+3. React-плеер отображает поток
+зависимости:
+pip install opencv-python
+------------------------------------------
+fastapi_stream:
+Архитектура:
+Камера на Ubuntu => FastAPI + FFmpeg => HLS (м3u8) => React + hls.js
+1. Камера	Подключена через ffmpeg (захват видео с устройства /dev/video0)
+2. FastAPI	Отдаёт готовые .m3u8 и .ts сегменты как статику
+3. FFmpeg	Генерирует HLS-поток в директорию (/videos/hls/)
+4. hls.js в React	Показывает поток на фронте
+5. WebSocket (опционально)	Управляет старт/стоп трансляции
+Зависимости:
+sudo apt install ffmpeg v4l-utils
+pip install fastapi uvicorn
+Run FastAPI:
+```bash
+uvicorn app:app --reload --host 0.0.0.0 --port 8001
+```
+! проверить вемкамеры
+```bash
+v4l2-ctl --list-devices
+```
+
+Фронтенд:
+npm install hls.js
+
+отладка:
+ls -l /dev/video*  # Проверьте права доступа (должны быть crw-rw----+)
+crw-rw----+ 1 root video 81, 0 Apr 10 10:59 /dev/video0
+crw-rw----+ 1 root video 81, 1 Apr 10 10:59 /dev/video1
+groups | grep video  # Пользователь должен состоять в группе video
+excavator@kv-2 ~/Documents/react_knowledge ☭ groups | grep video
+excavator@kv-2 ~/Documents/react_knowledge ☭ groups
+excavator adm cdrom sudo dip plugdev lpadmin lxd sambashare libvirt ollama docker
+Тестирование камеры отдельно
+ffmpeg -f v4l2 -i /dev/video0 -vf "scale=1280x720" -f matroska - | ffplay -
+изолражение появилось
+(Если изображение не появляется:
+Проверьте список устройств: v4l2-ctl --list-devices
+Обновите драйверы через ubuntu-drivers devices)
