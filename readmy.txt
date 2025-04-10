@@ -19,6 +19,9 @@ fastapi_stream:
 4. hls.js в React	Показывает поток на фронте
 5. WebSocket (опционально)	Управляет старт/стоп трансляции
 Зависимости:
+cd back_stream
+mkdir -p stream/videos/
+touch app.py
 sudo apt install ffmpeg v4l-utils
 pip install fastapi uvicorn
 Run FastAPI:
