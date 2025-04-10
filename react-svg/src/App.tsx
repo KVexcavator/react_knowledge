@@ -1,39 +1,63 @@
-import {  } from 'react'
-import './App.css'
 // import WindowDrawing from "./WindowDrawing"
 // import Camera from './video_streams/MyCamera'
+import { useEffect, useRef, useState } from 'react'
+import './App.css'
 import CameraPlayer from './video_streams/CameraPlayer'
 
 function App() {
-  const startStream = async () => {
-    try {
-      const res = await fetch("http://localhost:8001/start-stream", {
-        method: "POST",
-      });
-      const json = await res.json();
-      console.log(json);
-    } catch (err) {
-      console.error("Ошибка запуска трансляции", err);
-    }
-  };
+  const ws = useRef<WebSocket | null>(null);
+  const [status, setStatus] = useState("disconnected")
+  const [streamVersion, setStreamVersion] = useState(0)
+  // эксперементальным путем устанавливается
+  const delay = 20000
 
-  const stopStream = async () => {
-    try {
-      const res = await fetch("http://localhost:8001/stop-stream", {
-        method: "POST",
-      });
-      const json = await res.json();
-      console.log(json);
-    } catch (err) {
-      console.error("Ошибка остановки трансляции", err);
+  useEffect(() => {
+    ws.current = new WebSocket("ws://localhost:8001/ws")
+
+    ws.current.onopen = () => {
+      console.log("WebSocket connected")
+      setStatus("connected")
     }
-  };
+
+    ws.current.onclose = () => {
+      console.log("WebSocket disconnected")
+      setStatus("disconnected")
+    }
+
+    ws.current.onmessage = (event) => {
+      console.log("WS Message:", event.data)
+      if (event.data === "Stream started") {
+        setStreamVersion(prev => prev + 1)
+      }
+    }
+
+    ws.current.onerror = (err) => {
+      console.error("WebSocket error:", err)
+    }
+
+    return () => {
+      ws.current?.close();
+    };
+  }, [])
+
+  const startStream = () => {
+    ws.current?.send("start")
+    setTimeout(() => {
+      setStreamVersion(prev => prev + 1)
+    }, delay)
+  }
+
+  const stopStream = () => {
+    ws.current?.send("stop")
+    setStreamVersion(prev => prev + 1)
+  }
 
   return (
     <div className="flex flex-col items-center gap-6 mt-10">
       <h1 className="text-3xl font-bold text-cyan-400 underline">
-        Hello world!
+        Hello WebSocket world!
       </h1>
+      <div className="text-sm text-gray-500">WebSocket status: {status}</div>
 
       <div className="flex gap-4">
         <button
@@ -50,9 +74,9 @@ function App() {
         </button>
       </div>
 
-      <CameraPlayer />
+      <CameraPlayer key={streamVersion} /> 
     </div>
-  );
+  )
 }
 
-export default App;
+export default App

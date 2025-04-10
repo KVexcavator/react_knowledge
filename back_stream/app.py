@@ -1,9 +1,11 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
 import os
+import glob
+import asyncio
 
 app = FastAPI()
 app.add_middleware(
@@ -12,28 +14,21 @@ app.add_middleware(
   allow_methods=["*"],
   allow_headers=["*"],
 )
-HLS_DIR = "./stream/videos"
 
+HLS_DIR = "./stream/videos"
 app.mount("/hls", StaticFiles(directory=HLS_DIR), name="hls")
 
 ffmpeg_process = None
+connected_clients = set()
 
-@app.post("/start-stream")
-def start_stream(background_tasks: BackgroundTasks):
-  global ffmpeg_process
-
-  if ffmpeg_process and ffmpeg_process.poll() is None:
-    return {"status": "already running"}
-
-  os.makedirs(HLS_DIR, exist_ok=True)
-
-  command = [
+def get_ffmpeg_command():
+  return [
     "ffmpeg",
     "-f", "v4l2",
     "-framerate", "15",
     "-video_size", "640x480",
     "-i", "/dev/video0",
-    "-f", "pulse", "-i", "default",  # захват звука
+    "-f", "pulse", "-i", "default",
     "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease",
     "-c:v", "libx264",
     "-preset", "ultrafast",
@@ -48,18 +43,54 @@ def start_stream(background_tasks: BackgroundTasks):
     f"{HLS_DIR}/stream.m3u8"
   ]
 
-  ffmpeg_process = subprocess.Popen(command)
-  return {"status": "started"}
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+  await websocket.accept()
+  connected_clients.add(websocket)
+  try:
+    while True:
+      data = await websocket.receive_text()
+      print(f"WebSocket received: {data}")
+      if data == "start":
+        await start_stream()
+        await websocket.send_text("Stream started")
+      elif data == "stop":
+        await stop_stream()
+        await websocket.send_text("Stream stopped")
+  except WebSocketDisconnect:
+    connected_clients.remove(websocket)
+    print("Client disconnected")
 
-@app.post("/stop-stream")
-def stop_stream():
+async def start_stream():
+  global ffmpeg_process
+  if ffmpeg_process and ffmpeg_process.poll() is None:
+    return
+  os.makedirs(HLS_DIR, exist_ok=True)
+  ffmpeg_process = subprocess.Popen(get_ffmpeg_command())
+
+async def stop_stream():
   global ffmpeg_process
   if ffmpeg_process:
     ffmpeg_process.terminate()
     ffmpeg_process.wait()
     ffmpeg_process = None
-  return {"status": "stopped"}
+
+  # Очистка HLS директории
+  for f in glob.glob(f"{HLS_DIR}/*"):
+    try:
+      os.remove(f)
+    except Exception as e:
+      print(f"Ошибка при удалении {f}: {e}")
 
 @app.get("/")
 def root():
   return FileResponse("index.html")
+
+@app.on_event("startup")
+def clean_on_startup():
+  print("Очистка HLS директории при запуске сервера...")
+  for f in glob.glob(f"{HLS_DIR}/*"):
+    try:
+      os.remove(f)
+    except Exception as e:
+      print(f"Ошибка при удалении {f}: {e}")
