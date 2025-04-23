@@ -1,14 +1,15 @@
-// import WindowDrawing from "./WindowDrawing"
+// import WindowDrawing from './drawing/WindowDrawing'
 // import Camera from './video_streams/MyCamera'
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import CameraPlayer from './video_streams/CameraPlayer'
 
 function App() {
+  // запустить спeрва back_stream
   const ws = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState("disconnected")
   const [streamVersion, setStreamVersion] = useState(0)
-  // эксперементальным путем устанавливается
+  // задержка создания потока на беке устанавливается эксперементальным путем 
   const delay = 20000
 
   useEffect(() => {

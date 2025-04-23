@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import subprocess
 import os
 import glob
-import asyncio
+import asyncio # TODO
 
 app = FastAPI()
 app.add_middleware(
@@ -62,6 +62,7 @@ async def websocket_endpoint(websocket: WebSocket):
     print("Client disconnected")
 
 async def start_stream():
+  # TODO: проверять, что папка videos готова(не пустая), и только потом запускать логику
   global ffmpeg_process
   if ffmpeg_process and ffmpeg_process.poll() is None:
     return

@@ -1,0 +1,284 @@
+https://medium.com/data-science/kafka-in-action-building-a-distributed-multi-video-processing-pipeline-with-python-and-confluent-9f133858f5a0
+
+Kafka в действии: создание распределенного конвейера обработки нескольких видео с помощью Python и Confluent Kafka
+Масштабная обработка данных и машинное обучение в реальном времени.
+
+Сценарий (диаграмма article1): 
+- есть несколько источников, генерирующих видеопотоки
+- необходимо обрабатывать и хранить данные практически в реальном времени 
+
+Запуск Kafka
+Stephane Maarek kafka-stack-docker-compose для запуска Kafka в Docker
+```
+git clone https://github.com/simplesteph/kafka-stack-docker-compose.git
+```
+В этой статье мы упростим задачу и запустим кластер с одним zookeeper и одним сервером kafka. 
+```
+cd kafka-stack-docker-compose
+docker-compose -f zk-single-kafka-single.yml up
+```
+
+Запуск MongoDB
+```
+docker volume create data-mongodb
+docker run -v data-mongodb:/data/db -p 27017:27017 --name mongodb -d mongo
+```
+
+--------------------------------
+Kafka in action
+Клонируйте репозиторий в рабочую область.
+```
+git clone https://github.com/wingedrasengan927/Distributed-Multi-Video-Streaming-and-Processing-with-Kafka.git
+```
+Далее устанавливаем необходимые зависимости. Лучше создать отдельную виртуальную среду для проекта и потом устанавливать.
+```
+cd Distributed-Multi-Video-Streaming-and-Processing-with-Kafka
+pip install -r requirements.txt
+```
+
+Kafka Topic
+Чтобы создать тему Kafka:
+```python create_topic.py
+from confluent_kafka.admin import AdminClient, NewTopic
+
+n_repicas = 1
+n_partitions = 3
+
+admin_client = AdminClient({
+    "bootstrap.servers": "localhost:9092"
+})
+
+topic_list = []
+topic_list.append(NewTopic("multi-video-stream", n_partitions, n_repicas))
+fs = admin_client.create_topics(topic_list)
+
+for topic, f in fs.items():
+    try:
+        f.result()  # The result itself is None
+        print("Topic {} created".format(topic))
+    except Exception as e:
+        print("Failed to create topic {}: {}".format(topic, e))
+```
+Здесь я создал тему под названием multi-video-stream с фактором репликации 1 и разделами 3. Вы можете поэкспериментировать с фактором репликации и количеством разделов, но не забудьте изменить конфигурацию сервера в клиенте администратора (строка 6) соответствующим образом, а также обратите внимание, что количество реплик не может превышать количество серверов в кластере.
+--------------------------------------------------
+Kafka Producer
+Приложение Producer считывает кадры из видео и публикует их в Kafka Topic
+```python producer_app.py
+from glob import glob
+import concurrent.futures
+from utils import *
+from producer_config import config as producer_config
+from confluent_kafka import Producer
+import os
+import time
+
+class ProducerThread:
+    def __init__(self, config):
+        self.producer = Producer(config)
+
+    def publishFrame(self, video_path):
+        video = cv2.VideoCapture(video_path)
+        video_name = os.path.basename(video_path).split(".")[0]
+        frame_no = 1
+        while video.isOpened():
+            _, frame = video.read()
+            # pushing every 3rd frame
+            if frame_no % 3 == 0:
+                frame_bytes = serializeImg(frame)
+                self.producer.produce(
+                    topic="multi-video-stream", 
+                    value=frame_bytes, 
+                    on_delivery=delivery_report,
+                    timestamp=frame_no,
+                    headers={
+                        "video_name": str.encode(video_name)
+                    }
+                )
+                self.producer.poll(0)
+            time.sleep(0.1)
+            frame_no += 1
+        video.release()
+        return
+        
+    def start(self, vid_paths):
+        # runs until the processes in all the threads are finished
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.map(self.publishFrame, vid_paths)
+
+        self.producer.flush() # push all the remaining messages in the queue
+        print("Finished...")
+
+if __name__ == "__main__":
+    video_dir = "videos/"
+    video_paths = glob(video_dir + "*.webm") # change extension here accordingly
+ 
+    producer_thread = ProducerThread(producer_config)
+    producer_thread.start(video_paths)
+```
+В начале я упомянул, что мы будем работать с несколькими источниками, генерирующими видеопотоки. Нам нужен способ смоделировать это в нашей локальной среде. Мы можем сделать это, используя параллелизм и обрабатывая каждое видео в потоке.
+
+Kafka Producer потокобезопасен — мы можем создать один экземпляр Producer и поделиться им в нескольких потоках.
+
+В коде выше я обернул все функции в класс, и мы создаем Kafka Producer, когда создаем экземпляр этого класса.
+
+Метод publishFrame отвечает за чтение кадров из видео и публикацию их в Kafka Topic. Здесь мы используем opencv для обработки видео. При вызове метода produce мы передаем следующие аргументы:
+
+- topic: имя темы, в которую мы хотим отправить данные. Помните, что мы уже создали тему ранее.
+- value: это фактические данные видеокадра, которые сериализуются в байты.
+- on_delivery: метод produce является асинхронным. Он не ждет подтверждения того, что сообщение было доставлено или нет. Мы передаем функцию обратного вызова, которая регистрирует информацию о созданном сообщении или ошибке, если таковая имеется. Обратные вызовы выполняются и отправляются как побочный эффект вызовов методов poll или flush.
+- timestamp: значение, которое дает информацию о свойстве времени данных. Обратите внимание, что здесь я передаю номер кадра вместо абсолютного времени, так как это более актуально.
+- headers: заголовки содержат любые связанные метаданные, которые мы хотим опубликовать в теме. Обратите внимание, что заголовки не будут регистрироваться функцией обратного вызова.
+
+Также обратите внимание, что мы публикуем каждый 3-й кадр и ждем некоторое время после каждого кадра. Это связано с тем, что в реальном мире мы получаем кадры из источника с определенной частотой кадров в секунду, и между каждым последующим кадром нет большой разницы в информации, особенно в контексте машинного обучения. Это также помогает снизить нагрузку на сервер Kafka.
+Метод start сопоставляет каждое видео с потоком и запускает приложение одновременно.
+Чтобы запустить приложение Producer, поместите ваши видео в папку video, измените расширение соответствующим образом в строке 47, а затем выполните:
+```
+python producer_app.py
+```
+Это начнет публиковать видеокадры в Kafka Topic одновременно. Вы должны увидеть информацию о том, что созданное сообщение регистрируется.
+----------------------------------------
+
+Kafka Consumer
+Потребительское приложение подписывается на Kafka Topic для получения данных. Мы запускаем вывод данных через модель классификации изображений, а затем сохраняем результаты в базе данных MongoDB
+```python consumer_app.py
+import threading
+from confluent_kafka import Consumer, KafkaError, KafkaException
+from consumer_config import config as consumer_config
+from utils import *
+
+import tensorflow as tf
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.applications.imagenet_utils import decode_predictions
+
+from pymongo import MongoClient
+
+import cv2
+import numpy as np
+import time
+
+class ConsumerThread:
+    def __init__(self, config, topic, batch_size, model, db, videos_map):
+        self.config = config
+        self.topic = topic
+        self.batch_size = batch_size
+        self.model = model
+        self.db = db
+        self.videos_map = videos_map
+
+    def read_data(self):
+        consumer = Consumer(self.config)
+        consumer.subscribe(self.topic)
+        self.run(consumer, 0, [], [])
+
+    def run(self, consumer, msg_count, msg_array, metadata_array):
+        try:
+            while True:
+                msg = consumer.poll(0.5)
+                if msg == None:
+                    continue
+                elif msg.error() == None:
+
+                    # convert image bytes data to numpy array of dtype uint8
+                    nparr = np.frombuffer(msg.value(), np.uint8)
+
+                    # decode image
+                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    img = cv2.resize(img, (224, 224))
+                    msg_array.append(img)
+
+                    # get metadata
+                    frame_no = msg.timestamp()[1]
+                    video_name = msg.headers()[0][1].decode("utf-8")
+
+                    metadata_array.append((frame_no, video_name))
+
+                    # bulk process
+                    msg_count += 1
+                    if msg_count % self.batch_size == 0:
+                        # predict on batch
+                        img_array = np.asarray(msg_array)
+                        img_array = preprocess_input(img_array)
+                        predictions = self.model.predict(img_array)
+                        labels = decode_predictions(predictions)
+
+                        self.videos_map = reset_map(self.videos_map)
+                        for metadata, label in zip(metadata_array, labels):
+                            top_label = label[0][1]
+                            confidence = label[0][2]
+                            confidence = confidence.item()
+                            frame_no, video_name = metadata
+                            doc = {
+                                "frame": frame_no,
+                                "label": top_label,
+                                "confidence": confidence
+                            }
+                            self.videos_map[video_name].append(doc)
+
+                        # insert bulk results into mongodb
+                        insert_data_unique(self.db, self.videos_map)
+
+                        # commit synchronously
+                        consumer.commit(asynchronous=False)
+                        # reset the parameters
+                        msg_count = 0
+                        metadata_array = []
+                        msg_array = []
+
+                elif msg.error().code() == KafkaError._PARTITION_EOF:
+                    print('End of partition reached {0}/{1}'
+                        .format(msg.topic(), msg.partition()))
+                else:
+                    print('Error occured: {0}'.format(msg.error().str()))
+
+        except KeyboardInterrupt:
+            print("Detected Keyboard Interrupt. Quitting...")
+            pass
+
+        finally:
+            consumer.close()
+
+    def start(self, numThreads):
+        # Note that number of consumers in a group shouldn't exceed the number of partitions in the topic
+        for _ in range(numThreads):
+            t = threading.Thread(target=self.read_data)
+            t.daemon = True
+```
+Потребители работают в группе потребителей. Каждый потребитель в группе считывает данные из эксклюзивных разделов. Если в группе больше потребителей, чем количество разделов, некоторые потребители останутся неактивными.
+
+В нашем приложении потребителя у нас есть несколько потребителей, принадлежащих к одной группе, которые одновременно считывают данные из темы Kafka. Обратите внимание, что в отличие от производителя, потребитель не является потокобезопасным, каждый поток должен иметь отдельный экземпляр потребителя.
+
+Мы выполняем все операции от получения данных до их обработки и сохранения в методе run . Сначала мы опрашиваем данные из темы, и если нет ошибок и сообщение является допустимым, мы переходим к дальнейшей обработке.
+
+Обратите внимание, что потребитель опрашивает пакет сообщений из темы одновременно и сохраняет их во внутреннем буфере и считывает оттуда.
+
+После получения сообщения мы декодируем его, извлекаем из него временную метку и метаданные и добавляем в массив.
+--------------------------------------------
+Bulk Operations
+Если вы заметили, мы не обрабатываем сообщение по одному, а вместо этого мы пакетируем данные и выполняем операции с пакетом данных. Это повышает эффективность и пропускную способность.
+
+Как только сформирован пакет данных, мы передаем его в модель классификации изображений, которая в нашем случае является моделью ResNet50, обученной на ImageNet. Модель выводит метки и соответствующие им доверительные значения для каждого кадра. Мы выбираем только верхнюю метку и ее доверительные значения и сохраняем ее.
+
+Затем мы берем полученные результаты и вставляем их в базу данных MongoDB. Данные структурированы в базе данных так, что каждое видео у нас есть как коллекция, а в каждой коллекции у нас есть записи или документы, содержащие информацию о кадре. Документ имеет номер кадра, метку кадра и доверительные значения в качестве своих полей, что упрощает запрос данных. Также обратите внимание, что мы выполняем пакетную вставку в базу данных, как мы говорили ранее.
+
+После этого мы завершаем обработку данных и хотим сообщить то же самое Kafka. Kafka использует смещения для отслеживания позиции записи данных, опрошенной потребителем, поэтому даже если потребитель выйдет из строя, Kafka сможет прочитать данные с того места, где они остановились. То, как мы хотим зафиксировать смещения и какую семантику доставки использовать, остается на наше усмотрение. Здесь мы фиксируем смещения после завершения обработки данных. Это соответствует семантике доставки по крайней мере один раз.
+
+Примечание: поскольку мы фиксируем смещения вручную, в файле конфигурации мы должны установить свойство enable.auto.commit в значение False
+
+Примечание: в семантике доставки хотя бы один раз есть вероятность, что сообщение будет обработано снова, если потребитель выйдет из строя или обработка пойдет не так. Чтобы избежать дублирования сообщений, мы должны поддерживать идемпотентные системы. Например, в нашем случае мы гарантируем, что вставляем уникальный документ в коллекцию, чтобы в базе данных не было дубликатов, даже если сообщение будет обработано снова.
+
+Хорошо, вернемся к коду. Чтобы запустить приложение-потребитель, установите тему в строке 108, измените имена видео в строке 124 (Краткое примечание: они должны соответствовать именам видео, которые мы публикуем через Producer, а также это будут имена коллекций в базе данных), убедитесь, что количество потребителей не превышает количество разделов в строке 128, а затем выполните:
+```
+python consumer_app.py
+```
+----------------------------------------------
+Deploying in Production
+В производстве все может стать намного сложнее. К счастью, у нас есть управляемые сервисы на облачной платформе, такие как Google Cloud Pub/Sub или Amazon Kinesis, которые облегчают нашу работу. Предпочтительно использовать их в производстве.
+
+Кроме того, в этой статье мы не рассматривали конфигурацию производителя и потребителя, но очень важно настроить их в зависимости от варианта использования. Например, в некоторых случаях задержка может быть приоритетной, и мы можем не беспокоиться о потере данных или порядке данных, в то время как в других случаях данные могут иметь высокий приоритет. Производитель и потребитель должны быть настроены соответствующим образом.
+
+Для машинного обучения в производстве лучше всего использовать API Tensorflow Serving вместо инициализации модели в приложении потребителя.
+
+Также может быть предпочтительнее использовать управляемые базы данных в облаке для хранения данных.
+https://cloud.google.com/pubsub
+https://aws.amazon.com/ru/kinesis/

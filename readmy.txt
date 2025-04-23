@@ -37,16 +37,13 @@ v4l2-ctl --list-devices
 npm install hls.js
 
 отладка:
-ls -l /dev/video*  # Проверьте права доступа (должны быть crw-rw----+)
+ls -l /dev/video*  # почекать права доступа (должны быть crw-rw----+)
 crw-rw----+ 1 root video 81, 0 Apr 10 10:59 /dev/video0
 crw-rw----+ 1 root video 81, 1 Apr 10 10:59 /dev/video1
 groups | grep video  # Пользователь должен состоять в группе video
-excavator@kv-2 ~/Documents/react_knowledge ☭ groups | grep video
-excavator@kv-2 ~/Documents/react_knowledge ☭ groups
-excavator adm cdrom sudo dip plugdev lpadmin lxd sambashare libvirt ollama docker
 Тестирование камеры отдельно
 ffmpeg -f v4l2 -i /dev/video0 -vf "scale=1280x720" -f matroska - | ffplay -
-изолражение появилось
+изображение появилось
 (Если изображение не появляется:
-Проверьте список устройств: v4l2-ctl --list-devices
-Обновите драйверы через ubuntu-drivers devices)
+почекать список устройств: v4l2-ctl --list-devices
+или может обновить драйверы через ubuntu-drivers devices)
